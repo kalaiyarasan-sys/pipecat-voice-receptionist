@@ -1,0 +1,4 @@
+pipecat-ai[deepgram,openai,cartesia,silero,webrtc,websocket,runner]
+python-dotenv
+loguru
+pytest
