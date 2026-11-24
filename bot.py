@@ -1,13 +1,18 @@
 """Sunrise Clinic voice receptionist built with Pipecat.
 
-Pipeline:  mic -> Silero VAD -> Deepgram STT (streaming) -> LLM with tools
-           -> Cartesia TTS (streaming) -> speaker
+Pipeline:  mic -> Silero VAD -> Whisper STT (local) -> Ollama LLM with tools
+           -> Piper TTS (local) -> speaker
+
+Everything runs on this machine: no API keys, no paid services. Models are
+downloaded once (Whisper from Hugging Face, Piper voice, `ollama pull`) and
+then work offline.
 
 Run locally (opens a WebRTC test page in your browser):
     python bot.py
 """
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -19,13 +24,15 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.frames.frames import LLMRunFrame
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
-from pipecat.services.cartesia.tts import CartesiaTTSService
-from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.llm_service import FunctionCallParams
-from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.ollama.llm import OLLamaLLMService
+from pipecat.services.piper.tts import PiperTTSService
+from pipecat.services.whisper.stt import WhisperSTTService
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 
 from receptionist.clinic import BookingError, Clinic
@@ -137,25 +144,59 @@ HANDLERS = {
 
 # ----- pipeline ------------------------------------------------------------
 
-async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
-    stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
-
-    llm = OpenAILLMService(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
-        base_url=os.getenv("OPENAI_BASE_URL") or None,
+def _make_stt() -> WhisperSTTService:
+    # "small" is multilingual (handles Tamil); use "base" for speed or
+    # "large-v3-turbo" for accuracy if you have a GPU.
+    # WHISPER_LANGUAGE empty = auto-detect per utterance (English/Tamil mix).
+    language = os.getenv("WHISPER_LANGUAGE") or None
+    return WhisperSTTService(
+        device=os.getenv("WHISPER_DEVICE", "cpu"),
+        compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"),
+        settings=WhisperSTTService.Settings(
+            model=os.getenv("WHISPER_MODEL", "small"),
+            language=language,
+        ),
     )
+
+
+def _make_llm() -> OLLamaLLMService:
+    # Any Ollama model with the "tools" capability works (check: ollama show <model>).
+    return OLLamaLLMService(
+        base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+        settings=OLLamaLLMService.Settings(model=os.getenv("LLM_MODEL", "qwen3-4b-local")),
+    )
+
+
+def _make_tts() -> PiperTTSService:
+    voices_dir = Path(os.getenv("PIPER_VOICES_DIR", "models/piper"))
+    voices_dir.mkdir(parents=True, exist_ok=True)
+    return PiperTTSService(
+        download_dir=voices_dir,
+        settings=PiperTTSService.Settings(voice=os.getenv("PIPER_VOICE", "en_US-lessac-medium")),
+    )
+
+
+def _system_prompt() -> str:
+    prompt = build_system_prompt()
+    # Qwen3 "thinks" before answering by default, which adds seconds of
+    # latency on CPU. /no_think turns that off for a snappier call.
+    if os.getenv("LLM_NO_THINK", "true").lower() == "true":
+        prompt += "\n/no_think"
+    return prompt
+
+
+async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
+    stt = _make_stt()
+
+    llm = _make_llm()
     for name, fn in HANDLERS.items():
         llm.register_function(name, _safe(fn))
 
-    tts = CartesiaTTSService(
-        api_key=os.getenv("CARTESIA_API_KEY"),
-        voice_id=os.getenv("CARTESIA_VOICE_ID", "f9836c6e-a0bd-460e-9d3c-f7299fa60f94"),
-    )
+    tts = _make_tts()
 
-    messages = [{"role": "system", "content": build_system_prompt()}]
-    context = OpenAILLMContext(messages, TOOLS)
-    context_aggregator = llm.create_context_aggregator(context)
+    messages = [{"role": "system", "content": _system_prompt()}]
+    context = LLMContext(messages, TOOLS)
+    context_aggregator = LLMContextAggregatorPair(context)
 
     pipeline = Pipeline(
         [
@@ -181,8 +222,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Caller connected")
-        messages.append({"role": "system", "content": GREETING_INSTRUCTION})
-        await task.queue_frames([context_aggregator.user().get_context_frame()])
+        context.add_message({"role": "system", "content": GREETING_INSTRUCTION})
+        await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):

@@ -1,4 +1,4 @@
-pipecat-ai[deepgram,openai,cartesia,silero,webrtc,websocket,runner]
+pipecat-ai[openai,whisper,piper,silero,webrtc,websocket,runner]==0.0.108
 python-dotenv
 loguru
 pytest

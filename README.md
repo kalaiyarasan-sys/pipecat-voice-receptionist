@@ -3,14 +3,16 @@
 A real-time voice AI receptionist for a clinic, built with [Pipecat](https://github.com/pipecat-ai/pipecat). Callers speak English, Tamil or Tanglish to book, check and cancel appointments.
 
 ```
-Caller mic ─▶ Silero VAD ─▶ Deepgram STT ─▶ LLM + tools ─▶ Cartesia TTS ─▶ Caller speaker
-               (turn end)     (streaming)    (function     (streaming)
-                                              calling)
+Caller mic ─▶ Silero VAD ─▶ Whisper STT ─▶ Ollama LLM + tools ─▶ Piper TTS ─▶ Caller speaker
+               (turn end)     (local,        (local, function      (local)
+                               faster-whisper) calling)
 ```
 
 ## Features
 
-- **Streaming STT → LLM → TTS pipeline** with Pipecat, every stage streamed for low latency
+- **100% local and free**: faster-whisper STT, Ollama LLM, Piper TTS. No API keys; works offline after a one-time model download
+
+- **STT → LLM → TTS pipeline** with Pipecat (LLM and TTS stream; Whisper transcribes each VAD segment)
 - **Barge-in**: the caller can interrupt the bot mid-sentence
 - **Voice activity detection** with a tuned end-of-turn pause (`stop_secs=0.4`)
 - **Tool calling**: `list_doctors`, `check_availability`, `book_appointment`, `cancel_appointment`, `transfer_to_staff`
@@ -34,16 +36,24 @@ tests/                   Unit tests for scheduling logic
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env      # add Deepgram, OpenAI and Cartesia keys
+cp .env.example .env      # local model settings, no keys needed
+ollama serve &            # if not already running
+ollama pull qwen3:4b      # any model with "tools" capability; set LLM_MODEL in .env
 python bot.py             # open http://localhost:7860 and talk to the bot
 pytest                    # run tests
 ```
 
 `python bot.py -t twilio` runs the same bot over a Twilio phone number (see Pipecat's Twilio docs for webhook setup).
 
+## Local model notes
+
+- **First run** downloads the Whisper model (Hugging Face cache) and the Piper voice (`models/piper/`). After that no internet is needed.
+- **CPU latency**: `WHISPER_MODEL=base` and a 3-4B LLM keep replies around a few seconds on a laptop CPU. Use a GPU (`WHISPER_DEVICE=cuda`) for faster turns.
+- **Tamil**: Whisper understands Tamil, but Piper has no Tamil voice, so the bot speaks Tamil in Roman letters (Tanglish) with an English voice.
+
 ## Roadmap
 
-- Sarvam AI STT/TTS for better Tamil recognition and voice
+- Local Tamil TTS voice (e.g. MMS-TTS / Indic Parler-TTS) as a custom Pipecat TTS service
 - PostgreSQL for bookings, Redis for live call state
 - WhatsApp Business API channel sharing `clinic.py`
 - Simulated-call evaluation: task success and latency per scenario
