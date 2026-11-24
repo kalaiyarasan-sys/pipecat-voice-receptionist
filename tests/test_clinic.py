@@ -27,8 +27,15 @@ def test_lists_doctors(clinic):
 def test_availability_skips_lunch_and_caps_options(clinic):
     day = next_weekday(0).isoformat()  # Monday, Dr. Priya works
     result = clinic.check_availability("Priya", day)
-    assert len(result["available"]) == 6
+    assert result["available"] == ["9:00 AM", "12:00 PM", "4:30 PM"]  # spread across the day
     assert result["total_free"] == 14  # 9-1 and 2-5, 30-min slots
+
+
+def test_availability_after_time(clinic):
+    day = next_weekday(0).isoformat()
+    result = clinic.check_availability("Priya", day, after="2 PM")
+    assert result["available"] == ["2:00 PM", "2:30 PM", "3:00 PM"]
+    assert result["total_free"] == 6  # 2-5 PM
 
 
 def test_doctor_off_day(clinic):

@@ -16,6 +16,7 @@ CLOSE_TIME = time(17, 0)
 LUNCH_START = time(13, 0)
 LUNCH_END = time(14, 0)
 BOOKING_WINDOW_DAYS = 14
+MAX_OPTIONS = 3  # times offered per availability check
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,15 @@ def _parse_time(value: str) -> time:
     raise BookingError(f"Time '{value}' is not a valid time, e.g. 10:30 or 3 PM.")
 
 
+def _spread(slots: list[datetime], k: int) -> list[datetime]:
+    """Pick k slots spread across the day, so the caller hears morning and
+    afternoon options (the LLM rarely asks again for later times)."""
+    if len(slots) <= k:
+        return slots
+    step = (len(slots) - 1) / (k - 1)
+    return [slots[round(i * step)] for i in range(k)]
+
+
 def _normalise_phone(phone: str) -> str:
     digits = "".join(ch for ch in phone if ch.isdigit())
     if digits.startswith("91") and len(digits) == 12:
@@ -121,7 +131,7 @@ class Clinic:
     def _taken(self, doctor_id: str) -> set[datetime]:
         return {b.slot for b in self._bookings.values() if b.doctor_id == doctor_id}
 
-    def check_availability(self, doctor: str, day: str) -> dict:
+    def check_availability(self, doctor: str, day: str, after: str | None = None) -> dict:
         doc = _find_doctor(doctor)
         d = _parse_date(day)
         self._check_window(d)
@@ -131,11 +141,18 @@ class Clinic:
         taken = self._taken(doc.id)
         now = datetime.now()
         free = [s for s in self._all_slots(doc, d) if s not in taken and s > now]
+        if after:
+            start = _parse_time(after)
+            free = [s for s in free if s.time() >= start]
+            options = free[:MAX_OPTIONS]
+        else:
+            options = _spread(free, MAX_OPTIONS)
         return {
             "doctor": doc.name,
             "date": d.isoformat(),
-            # Only a few options: long lists sound bad when spoken aloud.
-            "available": [s.strftime("%I:%M %p").lstrip("0") for s in free[:6]],
+            # Only a few options: long lists sound bad when spoken aloud, and small
+            # LLMs read out whatever they get, so the cap lives here, not just in the prompt.
+            "available": [s.strftime("%I:%M %p").lstrip("0") for s in options],
             "total_free": len(free),
         }
 

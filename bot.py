@@ -54,10 +54,14 @@ TOOLS = ToolsSchema(
         ),
         FunctionSchema(
             name="check_availability",
-            description="Get free appointment times for a doctor on a date.",
+            description="Get up to three free appointment times for a doctor on a date.",
             properties={
                 "doctor": {"type": "string", "description": "Doctor name or specialty"},
                 "date": {"type": "string", "description": "Date in YYYY-MM-DD"},
+                "after": {
+                    "type": "string",
+                    "description": "Optional earliest time, e.g. 2 PM for afternoon slots",
+                },
             },
             required=["doctor", "date"],
         ),
@@ -115,8 +119,8 @@ def list_doctors():
     return {"doctors": clinic.list_doctors()}
 
 
-def check_availability(doctor: str, date: str):
-    return clinic.check_availability(doctor, date)
+def check_availability(doctor: str, date: str, after: str | None = None):
+    return clinic.check_availability(doctor, date, after)
 
 
 def book_appointment(patient_name: str, phone: str, doctor: str, date: str, time: str):

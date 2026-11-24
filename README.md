@@ -29,18 +29,32 @@ bot.py                   Pipecat pipeline, transports, tool registration
 receptionist/clinic.py   Scheduling logic (slots, booking, cancellation, validation)
 receptionist/prompts.py  System prompt for voice conversation
 tests/                   Unit tests for scheduling logic
+scripts/simulate_call.py Text-only call scenarios against the real LLM and tools
 ```
 
 ## Run it
 
+Requires **Python 3.11 or newer**. On Python 3.10, Pipecat's dev runner fails with
+`ImportError: cannot import name 'HTTPMethod' from 'http'`.
+
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env      # local model settings, no keys needed
 ollama serve &            # if not already running
 ollama pull qwen3:4b      # any model with "tools" capability; set LLM_MODEL in .env
-python bot.py             # open http://localhost:7860 and talk to the bot
+python bot.py             # open http://localhost:7860/client and talk to the bot
 pytest                    # run tests
+```
+
+## Test conversations without a microphone
+
+`scripts/simulate_call.py` plays scripted callers (booking, Tanglish, medical
+advice, human hand-off) through the same prompt, tools and Ollama model the
+voice bot uses, and prints each reply, tool call and LLM latency:
+
+```bash
+python scripts/simulate_call.py
 ```
 
 `python bot.py -t twilio` runs the same bot over a Twilio phone number (see Pipecat's Twilio docs for webhook setup).
